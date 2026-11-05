@@ -112,6 +112,8 @@ const down = (e: PointerEvent) => {
   if (mode.value === 'brush' && cv.value && ctx) {
     cv.value.setPointerCapture(e.pointerId)
     last = { x: e.clientX, y: e.clientY, w: 5 }
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = 0.92
     ctx.fillStyle = inkColor()
     ctx.beginPath()
     ctx.arc(last.x, last.y, 3, 0, Math.PI * 2)
@@ -123,11 +125,13 @@ const move = (e: PointerEvent) => {
   if (!last || !ctx || mode.value !== 'brush') return
   const d = Math.hypot(e.clientX - last.x, e.clientY - last.y)
   const w = last.w * 0.7 + Math.max(3, Math.min(24, 26 - d * 0.9)) * 0.3
+  // reset composite sebelum stroke biar nggak kena efek fade loop
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.globalAlpha = 0.92
   ctx.strokeStyle = inkColor()
   ctx.lineWidth = w
   ctx.lineCap = 'round'
-  ctx.globalAlpha = 0.9
-  ctx.globalCompositeOperation = 'source-over'
+  ctx.lineJoin = 'round'
   ctx.beginPath()
   ctx.moveTo(last.x, last.y)
   ctx.lineTo(e.clientX, e.clientY)
