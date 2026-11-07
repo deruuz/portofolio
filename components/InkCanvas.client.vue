@@ -1,5 +1,5 @@
 <template>
-  <!-- Stamp layer — fixed, full viewport, behind canvas -->
+  <!-- Stamp layer -->
   <div class="stamp-layer" aria-hidden="true">
     <div
       v-for="s in stamps"
@@ -9,7 +9,7 @@
     >検</div>
   </div>
 
-  <!-- Drawing canvas -->
+  <!-- Canvas -->
   <canvas
     ref="cv"
     :class="['ink-canvas', mode !== 'read' ? 'on' : '', mode]"
@@ -21,23 +21,23 @@
 
   <!-- Tooltip -->
   <Transition name="tip-fade">
-    <div v-if="mode === 'brush'" class="tip" key="brush">Coret-coret di mana saja, tintanya pelan-pelan memudar</div>
-    <div v-else-if="mode === 'stamp'" class="tip" key="stamp">Klik untuk cap hanko 検 (kualitas terjamin)</div>
+    <div v-if="mode === 'brush'" class="tip" key="brush">Coret-coret di mana saja</div>
+    <div v-else-if="mode === 'stamp'" class="tip" key="stamp">Klik untuk cap hanko 検</div>
   </Transition>
 
   <!-- Toolbar -->
-  <div class="bar" role="toolbar" aria-label="Ink canvas controls">
-    <button :class="{ on: mode === 'read' }"   @click="setMode('read')">
-      <span class="btn-kanji">閲覧</span><span class="btn-label">{{ labels.read }}</span>
+  <div class="bar" role="toolbar">
+    <button :class="{ on: mode === 'read' }"  @click="setMode('read')">
+      <span class="bk">閲覧</span><span class="bl">{{ labels.read }}</span>
     </button>
-    <button :class="{ on: mode === 'brush' }"  @click="setMode('brush')">
-      <span class="btn-kanji">筆</span><span class="btn-label">{{ labels.brush }}</span>
+    <button :class="{ on: mode === 'brush' }" @click="setMode('brush')">
+      <span class="bk">筆</span><span class="bl">{{ labels.brush }}</span>
     </button>
-    <button :class="{ on: mode === 'stamp' }"  @click="setMode('stamp')">
-      <span class="btn-kanji">印</span><span class="btn-label">{{ labels.stamp }}</span>
+    <button :class="{ on: mode === 'stamp' }" @click="setMode('stamp')">
+      <span class="bk">印</span><span class="bl">{{ labels.stamp }}</span>
     </button>
     <button @click="clearAll">
-      <span class="btn-kanji">消</span><span class="btn-label">{{ labels.clear }}</span>
+      <span class="bk">消</span><span class="bl">{{ labels.clear }}</span>
     </button>
   </div>
 </template>
@@ -48,60 +48,58 @@ import { useLang } from '~/composables/useLang'
 
 type Mode = 'read' | 'brush' | 'stamp'
 
-const mode = ref<Mode>('read')
+const mode   = ref<Mode>('read')
 const stamps = ref<{ id: number; x: number; y: number; r: number }[]>([])
-const cv = ref<HTMLCanvasElement | null>(null)
-
+const cv     = ref<HTMLCanvasElement | null>(null)
 const { lang } = useLang()
 
 const labels = computed(() => {
-  if (lang.value === 'id') return { read: 'Baca',  brush: 'Coret', stamp: 'Cap',  clear: 'Hapus' }
-  if (lang.value === 'ja') return { read: '読む',  brush: '描く',  stamp: '捺す', clear: '消す'  }
-  return                          { read: 'View',  brush: 'Draw',  stamp: 'Stamp', clear: 'Clear' }
+  if (lang.value === 'id') return { read: 'Baca', brush: 'Coret', stamp: 'Cap',   clear: 'Hapus' }
+  if (lang.value === 'ja') return { read: '読む', brush: '描く',  stamp: '捺す',  clear: '消す'  }
+  return                          { read: 'View', brush: 'Draw',  stamp: 'Stamp',  clear: 'Clear' }
 })
 
-let ctx: CanvasRenderingContext2D | null = null
+let ctx:  CanvasRenderingContext2D | null = null
 let last: { x: number; y: number; w: number } | null = null
-let n = 0
-let rafId = 0
-let frame = 0
+let uid = 0, rafId = 0, frame = 0
+let cw = 0, ch = 0  // logical size (CSS px)
 
 const setMode = (m: Mode) => { mode.value = m }
 
-// ---- canvas size ----
+const inkColor = () => {
+  const c = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()
+  return c || '#1c1915'
+}
+
+// resize tanpa hapus drawing
 const resize = () => {
   if (!cv.value) return
-  const dpr = devicePixelRatio || 1
-  const w = window.innerWidth
-  const h = window.innerHeight
+  const dpr = Math.max(window.devicePixelRatio || 1, 1)
+  const nw = window.innerWidth
+  const nh = window.innerHeight
+  if (nw === cw && nh === ch) return
 
-  // snapshot drawing sebelum resize
   const snap = document.createElement('canvas')
   snap.width  = cv.value.width
   snap.height = cv.value.height
   snap.getContext('2d')?.drawImage(cv.value, 0, 0)
 
-  cv.value.width  = Math.floor(w * dpr)
-  cv.value.height = Math.floor(h * dpr)
+  cw = nw; ch = nh
+  cv.value.width  = Math.floor(nw * dpr)
+  cv.value.height = Math.floor(nh * dpr)
   ctx = cv.value.getContext('2d')!
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-  // restore drawing dengan skala yang benar
   if (snap.width > 0 && snap.height > 0) {
-    ctx.drawImage(snap, 0, 0, w, h)
+    ctx.drawImage(snap, 0, 0, nw, nh)
   }
 }
 
-// ---- ink color ----
-const inkColor = () =>
-  getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#1c1915'
-
-// ---- pointer handlers ----
 const down = (e: PointerEvent) => {
+  e.preventDefault()
   if (mode.value === 'stamp') {
-    // x/y are viewport coords; stamp layer is fixed so no scroll offset needed
     stamps.value.push({
-      id: n++,
+      id: uid++,
       x: e.clientX,
       y: e.clientY,
       r: Math.round(Math.random() * 24 - 12),
@@ -112,54 +110,56 @@ const down = (e: PointerEvent) => {
   if (mode.value === 'brush' && cv.value && ctx) {
     cv.value.setPointerCapture(e.pointerId)
     last = { x: e.clientX, y: e.clientY, w: 5 }
+    ctx.save()
     ctx.globalCompositeOperation = 'source-over'
-    ctx.globalAlpha = 0.92
+    ctx.globalAlpha = 1
     ctx.fillStyle = inkColor()
     ctx.beginPath()
-    ctx.arc(last.x, last.y, 3, 0, Math.PI * 2)
+    ctx.arc(last.x, last.y, 2.5, 0, Math.PI * 2)
     ctx.fill()
+    ctx.restore()
   }
 }
 
 const move = (e: PointerEvent) => {
   if (!last || !ctx || mode.value !== 'brush') return
+  e.preventDefault()
   const d = Math.hypot(e.clientX - last.x, e.clientY - last.y)
-  const w = last.w * 0.7 + Math.max(3, Math.min(24, 26 - d * 0.9)) * 0.3
-  // reset composite sebelum stroke biar nggak kena efek fade loop
+  if (d < 1) return
+  const w = last.w * 0.7 + Math.max(2, Math.min(20, 24 - d * 0.8)) * 0.3
+  ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.globalAlpha = 0.92
+  ctx.globalAlpha = 0.95
   ctx.strokeStyle = inkColor()
-  ctx.lineWidth = w
-  ctx.lineCap = 'round'
-  ctx.lineJoin = 'round'
+  ctx.lineWidth   = w
+  ctx.lineCap     = 'round'
+  ctx.lineJoin    = 'round'
   ctx.beginPath()
   ctx.moveTo(last.x, last.y)
   ctx.lineTo(e.clientX, e.clientY)
   ctx.stroke()
+  ctx.restore()
   last = { x: e.clientX, y: e.clientY, w }
 }
 
 const up = () => { last = null }
 
 const clearAll = () => {
-  if (ctx) ctx.clearRect(0, 0, window.innerWidth, window.innerHeight)
+  if (ctx) ctx.clearRect(0, 0, cw, ch)
   stamps.value = []
 }
 
-// ---- fade loop ----
 const reduced =
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 const fadeLoop = () => {
-  if (!ctx) { rafId = requestAnimationFrame(fadeLoop); return }
-  if (++frame % 6 === 0 && !last) {
+  if (++frame % 8 === 0 && !last && ctx) {
     ctx.save()
     ctx.globalCompositeOperation = 'destination-out'
-    ctx.globalAlpha = 1
-    ctx.fillStyle = 'rgba(0,0,0,0.015)'
-    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight)
+    ctx.globalAlpha = 0.012
+    ctx.fillRect(0, 0, cw, ch)
     ctx.restore()
   }
   rafId = requestAnimationFrame(fadeLoop)
@@ -180,7 +180,6 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* Stamp layer — fixed so stamps stay at click position regardless of scroll */
 .stamp-layer {
   position: fixed;
   inset: 0;
@@ -188,7 +187,6 @@ onBeforeUnmount(() => {
   z-index: 29;
   overflow: hidden;
 }
-
 .stamp-mark {
   position: absolute;
   display: grid;
@@ -198,21 +196,19 @@ onBeforeUnmount(() => {
   border: 3.5px solid var(--red);
   color: var(--red);
   border-radius: 5px;
-  font: 700 38px "Shippori Mincho", "Hiragino Mincho ProN", serif;
+  font: 700 38px "Shippori Mincho", serif;
   line-height: 1;
   background: color-mix(in srgb, var(--red) 8%, transparent);
   filter: url(#rough);
   transform: translate(-50%, -50%) rotate(var(--r, 0deg));
   animation: thud 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) forwards;
 }
-
 @keyframes thud {
-  0%   { opacity: 0;    transform: translate(-50%, -50%) scale(2)   rotate(var(--r, 0deg)); }
+  0%   { opacity: 0;    transform: translate(-50%,-50%) scale(2)  rotate(var(--r,0deg)); }
   55%  { opacity: 0.95; }
-  100% { opacity: 0.92; transform: translate(-50%, -50%) scale(1)   rotate(var(--r, 0deg)); }
+  100% { opacity: 0.92; transform: translate(-50%,-50%) scale(1)  rotate(var(--r,0deg)); }
 }
 
-/* Canvas — fixed, covers whole viewport */
 .ink-canvas {
   position: fixed;
   inset: 0;
@@ -225,25 +221,24 @@ onBeforeUnmount(() => {
 .ink-canvas.brush { cursor: crosshair; }
 .ink-canvas.stamp { cursor: cell; }
 
-/* Tooltip */
 .tip {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
-  z-index: 40;
+  bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+  z-index: 41;
   font-size: 13px;
   color: var(--mute);
   background: var(--paper);
-  padding: 2px 12px;
+  padding: 3px 14px;
   border-radius: 99px;
   pointer-events: none;
   white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,.1);
 }
 .tip-fade-enter-active, .tip-fade-leave-active { transition: opacity 0.2s; }
 .tip-fade-enter-from, .tip-fade-leave-to { opacity: 0; }
 
-/* Toolbar */
 .bar {
   position: fixed;
   left: 50%;
@@ -256,37 +251,27 @@ onBeforeUnmount(() => {
   border: 1px solid var(--ink);
   border-radius: 99px;
   padding: 5px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
-  /* lebar mengikuti konten, max biar nggak meluap layar kecil */
+  box-shadow: 0 6px 24px rgba(0,0,0,.18);
   max-width: calc(100vw - 32px);
 }
-
 .bar button {
   border: 0;
   background: none;
   color: var(--ink);
-  padding: 6px 12px;
+  padding: 7px 14px;
   border-radius: 99px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background .15s, color .15s;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  min-width: 52px;
+  min-width: 54px;
+  /* pastiin klik button nggak nutup canvas di bawahnya */
+  position: relative;
+  z-index: 41;
 }
-.bar button.on {
-  background: var(--ink);
-  color: var(--paper);
-}
-.btn-kanji {
-  font: 700 16px "Shippori Mincho", serif;
-  line-height: 1;
-}
-.btn-label {
-  font: 400 10px "Zen Kaku Gothic New", sans-serif;
-  line-height: 1;
-  opacity: 0.75;
-  letter-spacing: 0.03em;
-}
+.bar button.on { background: var(--ink); color: var(--paper); }
+.bk { font: 700 17px "Shippori Mincho", serif; line-height: 1; }
+.bl { font: 400 10px "Zen Kaku Gothic New", sans-serif; line-height: 1; opacity: 0.7; }
 </style>
